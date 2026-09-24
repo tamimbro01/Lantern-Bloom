@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Lantern Bloom</title>
+<script src="https://www.youtube.com/game_api/v1"></script>
+<style>html,body{margin:0;height:100%;background:#0b0a24;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}canvas{display:block;width:100%;height:100%}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d'),yt=window.ytgame;
+const safe=f=>{try{return f()}catch(e){}};
+let W,H,S,DPR;
+function rs(){DPR=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;S=Math.min(W,H)/500}
+addEventListener('resize',rs);rs();
+addEventListener('error',()=>safe(()=>yt.health.logError()));
+
+// ---- state
+const COL={n:'#ff9a3c',g:'#ffd84a',L:'#ff5f7a',b:'#9b4dff'};
+let st='menu',paused=false,score=0,best=0,lives=5,t=0,spawn=.4,cool=0,shake=0,lastEnd=0,mx=-1,my=-1,mouse=false;
+let L=[],R=[],B=[],P=[],T=[];
+const stars=Array.from({length:80},()=>({x:Math.random(),y:Math.random()*.7,p:Math.random()*6,s:Math.random()*1.6+.4}));
+
+// ---- audio (respects YouTube's audio setting)
+let ac,audioOn=true;
+if(yt)safe(()=>{audioOn=yt.system.isAudioEnabled();yt.system.onAudioEnabledChange(v=>audioOn=v)});
+function tone(f,d,type,v,f2){if(!ac||!audioOn)return;const n=ac.currentTime,o=ac.createOscillator(),a=ac.createGain();o.type=type||'sine';o.frequency.setValueAtTime(f,n);if(f2)o.frequency.exponentialRampToValueAtTime(f2,n+d);a.gain.setValueAtTime(v||.12,n);a.gain.exponentialRampToValueAtTime(.001,n+d);o.connect(a);a.connect(ac.destination);o.start();o.stop(n+d)}
+
+// ---- YouTube Playables lifecycle
+if(yt){
+  safe(()=>yt.system.onPause(()=>{paused=true;safe(()=>ac&&ac.suspend())}));
+  safe(()=>yt.system.onResume(()=>{paused=false;safe(()=>ac&&ac.resume())}));
+  safe(()=>yt.game.loadData().then(s=>{try{best=JSON.parse(s).best|0}catch(e){}}).catch(()=>{}).finally(()=>safe(()=>yt.game.gameReady())));
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)paused=true;else if(!yt)paused=false});
+
+// ---- game logic
+function reset(){score=0;lives=5;t=0;spawn=.5;cool=0;L=[];R=[];B=[];P=[];T=[];st='play'}
+function endGame(){st='over';lastEnd=performance.now();
+  if(score>best){best=score;safe(()=>yt.game.saveData(JSON.stringify({best})))}
+  safe(()=>yt.engagement.sendScore({value:score}));tone(160,.6,'sawtooth',.15,50)}
+function spawnL(){const lv=Math.min(score/80,1),r=Math.random();let type='n';
+  if(score>8&&r<.14)type='b';else if(r<.22)type='g';else if(r<.4)type='L';
+  const rad=(type=='L'?40:type=='g'?24:30)*S;
+  L.push({x:rad+Math.random()*(W-2*rad),y:H+rad*2,vy:-(60+Math.random()*40+lv*70)*S,ph:Math.random()*6,rad,type,hp:type=='L'?2:1,fl:0})}
+function fire(x,y){if(cool>0)return;cool=.35;const sx=W/2,sy=H-34*S;R.push({sx,sy,tx:x,ty:y,t:0});tone(280,.22,'sawtooth',.05,900)}
+function boom(x,y,c,n){for(let i=0;i<n;i++){const a=Math.random()*6.28,v=(50+Math.random()*190)*S;P.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:.5+Math.random()*.6,m:1.1,c})}}
+function txt(x,y,s,c){T.push({x,y,s,c,l:.9})}
+function hit(l,b){if(l.dead)return;l.hp--;l.fl=.15;
+  if(l.hp>0){tone(520,.1,'triangle',.1);return}
+  l.dead=1;
+  if(l.type=='b'){lives--;shake=.4;boom(l.x,l.y,'#c46bff',30);tone(90,.4,'sawtooth',.2,40);txt(l.x,l.y,'-1 life','#ff8aa3');if(lives<=0)endGame();return}
+  const gp=b.g;gp.n++;const pts=(l.type=='g'?5:l.type=='L'?3:1)*gp.n;score+=pts;
+  boom(l.x,l.y,COL[l.type],18);txt(l.x,l.y,'+'+pts,gp.n>2?'#ffe08a':'#fff');
+  tone(400+gp.n*70,.18,'sine',.14,800+gp.n*90);
+  if(b.d<8)B.push({x:l.x,y:l.y,max:62*S,dur:.3,t:0,r:0,g:gp,d:b.d+1,h:new Set()})}
+
+function update(dt){
+  t+=dt;cool=Math.max(0,cool-dt);shake=Math.max(0,shake-dt);
+  spawn-=dt;if(spawn<=0){spawnL();spawn=Math.max(.5,1.1-Math.min(score/80,1)*.55)*(st=='menu'?1.4:1)}
+  for(const r of R){r.t+=dt/.22;r.x=r.sx+(r.tx-r.sx)*r.t;r.y=r.sy+(r.ty-r.sy)*r.t;
+    P.push({x:r.x,y:r.y,vx:(Math.random()-.5)*30*S,vy:(Math.random()-.5)*30*S,l:.25,m:.25,c:'#ffe9a8'});
+    if(r.t>=1){r.done=1;B.push({x:r.tx,y:r.ty,max:96*S,dur:.35,t:0,r:0,g:{n:0},d:0,h:new Set()});tone(140,.3,'square',.1,50)}}
+  R=R.filter(r=>!r.done);
+  for(const b of B){b.t+=dt/b.dur;b.r=b.max*(1-(1-Math.min(b.t,1))**2);
+    for(const l of L)if(!l.dead&&!b.h.has(l)&&Math.hypot(l.x-b.x,l.y-b.y)<b.r+l.rad*.5){b.h.add(l);if(st=='play'||st=='menu')hit(l,b)}}
+  B=B.filter(b=>b.t<1);
+  for(const l of L){l.y+=l.vy*dt;l.x+=Math.sin(t*1.4+l.ph)*22*S*dt;l.fl=Math.max(0,l.fl-dt);
+    if(l.y<-l.rad*2.5){l.dead=1;if(st=='play'&&l.type!='b'){lives--;txt(l.x,H*.08,'escaped','#ff8aa3');tone(200,.2,'triangle',.1);if(lives<=0)endGame()}}}
+  L=L.filter(l=>!l.dead);
+  for(const p of P){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=90*S*dt;p.l-=dt}P=P.filter(p=>p.l>0);
+  for(const q of T){q.y-=40*S*dt;q.l-=dt}T=T.filter(q=>q.l>0)}
+
+// ---- drawing
+function rr(x,y,w,h,r){g.beginPath();g.roundRect?g.roundRect(x,y,w,h,r):g.rect(x,y,w,h)}
+function drawL(l){const x=l.x,y=l.y,r=l.rad,c=COL[l.type],pulse=l.type=='b'?.6+.4*Math.sin(t*8):1;
+  const gr=g.createRadialGradient(x,y,0,x,y,r*2.4);gr.addColorStop(0,c+(l.type=='b'?'88':'bb'));gr.addColorStop(1,c+'00');
+  g.globalAlpha=pulse;g.fillStyle=gr;g.fillRect(x-r*2.4,y-r*2.4,r*4.8,r*4.8);g.globalAlpha=1;
+  g.strokeStyle='rgba(255,230,180,.5)';g.lineWidth=1;g.beginPath();g.moveTo(x,y+r*.85);g.lineTo(x+Math.sin(t*3+l.ph)*r*.2,y+r*1.5);g.stroke();
+  g.fillStyle=l.fl>0?'#fff':(l.type=='b'?'#3b1470':c);rr(x-r*.8,y-r,r*1.6,r*1.9,r*.4);g.fill();
+  if(l.hp==2){g.strokeStyle='#fff';g.lineWidth=2.5*S;g.stroke()}
+  g.fillStyle='rgba(255,255,255,.28)';rr(x-r*.4,y-r*.85,r*.8,r*1.6,r*.3);g.fill();
+  g.strokeStyle='rgba(0,0,0,.22)';g.lineWidth=1.5;g.beginPath();g.moveTo(x-r*.3,y-r*.9);g.lineTo(x-r*.3,y+r*.8);g.moveTo(x+r*.3,y-r*.9);g.lineTo(x+r*.3,y+r*.8);g.stroke();
+  g.fillStyle='#2b1a12';rr(x-r*.6,y-r*1.1,r*1.2,r*.2,3);g.fill();rr(x-r*.6,y+r*.78,r*1.2,r*.2,3);g.fill();
+  g.textAlign='center';g.textBaseline='middle';
+  if(l.type=='b'){g.fillStyle='#ff5c7a';g.font='900 '+r*.9+'px Georgia,serif';g.fillText('!',x,y)}
+  if(l.type=='g'){g.fillStyle='#fff';g.font=r*.8+'px Georgia,serif';g.fillText('\u2726',x+Math.sin(t*4)*r*.15,y)}}
+function draw(){
+  g.setTransform(DPR,0,0,DPR,0,0);
+  const sh=shake>0?(Math.random()-.5)*10*S*shake:0;g.translate(sh,sh);
+  const bg=g.createLinearGradient(0,0,0,H);bg.addColorStop(0,'#0a0930');bg.addColorStop(.6,'#3a1a5c');bg.addColorStop(1,'#c8506a');
+  g.fillStyle=bg;g.fillRect(-20,-20,W+40,H+40);
+  for(const s of stars){g.globalAlpha=.4+.5*Math.sin(t*2+s.p);g.fillStyle='#fff';g.fillRect(s.x*W,s.y*H,s.s,s.s)}g.globalAlpha=1;
+  const mg=g.createRadialGradient(W*.8,H*.16,0,W*.8,H*.16,60*S);mg.addColorStop(0,'#fff6d8');mg.addColorStop(.3,'#ffeab0');mg.addColorStop(1,'#ffeab000');g.fillStyle=mg;g.fillRect(W*.8-60*S,H*.16-60*S,120*S,120*S);
+  for(let k=0;k<2;k++){g.fillStyle=k?'#150a2b':'#2a1240';g.beginPath();g.moveTo(-20,H+20);
+    for(let x=-20;x<=W+20;x+=10)g.lineTo(x,H*(k?.93:.88)+Math.sin(x*(k?.012:.008)+k*2)*H*.025);g.lineTo(W+20,H+20);g.fill()}
+  g.globalCompositeOperation='lighter';for(const l of L)drawL(l);
+  for(const b of B){g.globalAlpha=1-b.t;g.strokeStyle='#ffe9a8';g.lineWidth=3*S;g.beginPath();g.arc(b.x,b.y,b.r,0,6.28);g.stroke();
+    const rg=g.createRadialGradient(b.x,b.y,0,b.x,b.y,b.r);rg.addColorStop(0,'#fff3');rg.addColorStop(1,'#ffb84d22');g.fillStyle=rg;g.fill()}g.globalAlpha=1;
+  for(const p of P){g.globalAlpha=Math.max(0,p.l/p.m);g.fillStyle=p.c;g.beginPath();g.arc(p.x,p.y,2.6*S,0,6.28);g.fill()}g.globalAlpha=1;
+  g.globalCompositeOperation='source-over';
+  for(const r of R){g.fillStyle='#fff';g.beginPath();g.arc(r.x,r.y,3.5*S,0,6.28);g.fill()}
+  // launcher
+  const lx=W/2,ly=H-34*S;g.fillStyle='#ffd76a';g.beginPath();g.arc(lx,ly,11*S,0,6.28);g.fill();
+  g.strokeStyle='#ffd76a';g.lineWidth=3*S;g.beginPath();g.arc(lx,ly,19*S,-1.57,-1.57+6.28*(1-cool/.35));g.stroke();
+  if(mouse&&st=='play'&&mx>=0){g.setLineDash([6,6]);g.strokeStyle='rgba(255,233,168,.5)';g.lineWidth=1.5;g.beginPath();g.arc(mx,my,96*S,0,6.28);g.stroke();g.setLineDash([])}
+  g.textAlign='center';g.textBaseline='middle';
+  for(const q of T){g.globalAlpha=Math.min(1,q.l*2);g.fillStyle=q.c;g.font='700 '+20*S+'px Georgia,serif';g.fillText(q.s,q.x,q.y)}g.globalAlpha=1;
+  g.setTransform(DPR,0,0,DPR,0,0);
+  const pad=16*S+4;
+  if(st!='menu'){
+    g.fillStyle='#fff3d6';g.font='700 '+46*S+'px Georgia,serif';g.fillText(score,W/2,pad+26*S);
+    g.textAlign='left';g.font='700 '+22*S+'px Georgia,serif';g.fillStyle='#ffb0c0';g.fillText('\u2665'.repeat(Math.max(0,lives)),pad,pad+12*S);
+    g.textAlign='right';g.fillStyle='#e9d9ff';g.font='600 '+16*S+'px Georgia,serif';g.fillText('best '+best,W-pad,pad+12*S)}
+  if(st!='play'){
+    g.fillStyle='rgba(8,6,30,.55)';g.fillRect(0,0,W,H);g.textAlign='center';
+    g.fillStyle='#ffe3a0';g.font='700 '+(st=='menu'?58:40)*S+'px Georgia,serif';
+    g.fillText(st=='menu'?'Lantern Bloom':'Lanterns lost',W/2,H*.3);
+    g.fillStyle='#fff';g.font='400 '+22*S+'px Georgia,serif';
+    if(st=='menu'){
+      g.fillText('Tap the sky to send up a firework.',W/2,H*.42);
+      g.fillText('One pop sets off the next \u2014 longer chains score more.',W/2,H*.42+32*S);
+      g.fillStyle='#c9a4ff';g.fillText('Leave the dark lanterns alone.',W/2,H*.42+64*S);
+      if(best)g.fillText('best '+best,W/2,H*.42+100*S)}
+    else{g.font='700 '+56*S+'px Georgia,serif';g.fillStyle='#fff3d6';g.fillText(score,W/2,H*.44);
+      g.font='400 '+22*S+'px Georgia,serif';g.fillStyle='#e9d9ff';g.fillText(score>=best&&score>0?'New best!':'best '+best,W/2,H*.44+48*S)}
+    g.globalAlpha=.6+.4*Math.sin(t*4);g.fillStyle='#ffe3a0';g.font='700 '+26*S+'px Georgia,serif';
+    g.fillText(st=='menu'?'Tap to start':'Tap to play again',W/2,H*.72);g.globalAlpha=1}}
+
+// ---- input
+cv.addEventListener('pointerdown',e=>{
+  if(!ac)safe(()=>{ac=new (window.AudioContext||window.webkitAudioContext)()});safe(()=>ac&&ac.resume());
+  mouse=e.pointerType=='mouse';mx=e.clientX;my=e.clientY;
+  if(st=='menu')reset();
+  else if(st=='over'){if(performance.now()-lastEnd>700)reset()}
+  else if(!paused)fire(e.clientX,e.clientY)});
+cv.addEventListener('pointermove',e=>{mouse=e.pointerType=='mouse';mx=e.clientX;my=e.clientY});
+
+// ---- loop
+let last=performance.now(),first=false;
+function loop(now){const dt=Math.min(.05,(now-last)/1000);last=now;
+  if(!paused)update(dt);draw();
+  if(!first){first=true;safe(()=>yt.game.firstFrameReady())}
+  requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+</script></body></html>
